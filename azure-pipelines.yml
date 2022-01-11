@@ -1,0 +1,61 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- main
+
+pool: Default
+
+steps:
+- powershell: |
+      Import-Module -Name VMware.VimAutomation.HorizonView
+      Import-Module VMware.VimAutomation.Core 
+      Set-PowerCLIConfiguration -Scope AllUsers -InvalidCertificateAction Ignore -confirm:$false
+
+      #grabbing encrypted pw
+      $pass = ConvertTo-SecureString $(AdminPW) -AsPlainText -Force
+      $creds = new-object -typename System.Management.Automation.PSCredential -argumentlist "domain\vsphereadmin", $pass
+      $Servicepass = ConvertTo-SecureString $(DomainPW) -AsPlainText -Force
+      $ServiceCred = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList "domain\domainadmin", $Servicepass
+      $Localpass = ConvertTo-SecureString $(LocalPW) -AsPlainText -Force
+      $LocalCred = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList ".\administrator", $Localpass
+      $OU = "OU=2019 Servers,OU=Domain Member Servers,DC=domain,DC=com"
+
+      Connect-VIServer -Credential $creds -Server vcenter1.domain.com | Out-Null
+
+      $datacenter = Get-Datacenter "DataCenter01"
+      $VMCluster = Get-Cluster "Cluster1"
+      
+      #Array of computers.  CSV file contains parameters used in creating VM
+      $vmnames = import-csv $(System.DefaultWorkingDirectory)/scripts/VMwareVMs.csv | select-object VMs,Template,Folder,IPAddress
+
+      foreach($vms in $vmnames){
+          $newIP = $vms.IPAddress
+          $VMFolder = Get-Datacenter -Name $datacenter | get-folder -Name $vms.Folder
+          $template = Get-Template $vms.Template
+          $vmname = $vms.VMs
+          $newGateWay = $newIP.Split(".")[0]+"."+$newIP.Split(".")[1]+"."+$newIP.Split(".")[2]+".1"
+          $cmdIP = "netsh interface ipv4 set address name=`"Ethernet0`" static $newIP 255.255.255.0 $newGateWay"
+          $cmdDNS1 = "netsh interface ipv4 set dns name=`"Ethernet0`" static 8.8.8.8"
+          $cmdDNS2 = "netsh interface ip add dns name=`"Ethernet0`" 8.8.4.4 index=2"
+          new-vm -Name $vmname -ResourcePool $VMCluster -Location $VMFolder -Template $template -RunAsync -Confirm:$false
+          start-sleep -s 10
+          Start-VM -vm $vmname -Confirm:$false -ErrorAction SilentlyContinue
+          Start-Sleep -s 30
+          $VMIP = Get-VM -Name $vmname | Select Name, @{N="IP Address";E={@($_.guest.IPAddress[0])}}
+          $IPAddress = $VMIP.'IP Address'
+          Invoke-Command -ComputerName $IPAddress -Credential $LocalCred -ScriptBlock {Enable-PSRemoting}
+          start-sleep -s 10
+          Add-Computer -ComputerName $IPAddress -LocalCredential $LocalCred -DomainName "morgancollinggilbert.com" -OUPath $OU -Credential $ServiceCred -Restart -Force -confirm:$false
+          Start-Sleep -s 30
+          Invoke-Command -ComputerName $IPAddress -Credential $ServiceCred -ScriptBlock {Enable-PSRemoting}
+          Rename-Computer -ComputerName $IPAddress -NewName $vmname -DomainCredential $ServiceCred -Restart -confirm:$false
+          start-sleep -s 30
+          Invoke-VMScript -VM $vmname -ScriptType Bat -ScriptText $cmdIP -Verbose -GuestCredential $ServiceCred
+          Invoke-VMScript -VM $vmname -ScriptType Bat -ScriptText $cmdDNS1 -Verbose -GuestCredential $ServiceCred
+          Invoke-VMScript -VM $vmname -ScriptType Bat -ScriptText $cmdDNS2 -Verbose -GuestCredential $ServiceCred
+      }
+
+      Disconnect-VIServer * -Confirm:$false 
