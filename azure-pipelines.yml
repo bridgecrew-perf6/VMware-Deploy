@@ -48,7 +48,7 @@ steps:
           $IPAddress = $VMIP.'IP Address'
           Invoke-Command -ComputerName $IPAddress -Credential $LocalCred -ScriptBlock {Enable-PSRemoting}
           start-sleep -s 10
-          Add-Computer -ComputerName $IPAddress -LocalCredential $LocalCred -DomainName "morgancollinggilbert.com" -OUPath $OU -Credential $ServiceCred -Restart -Force -confirm:$false
+          Add-Computer -ComputerName $IPAddress -LocalCredential $LocalCred -DomainName "domain.com" -OUPath $OU -Credential $ServiceCred -Restart -Force -confirm:$false
           Start-Sleep -s 30
           Invoke-Command -ComputerName $IPAddress -Credential $ServiceCred -ScriptBlock {Enable-PSRemoting}
           Rename-Computer -ComputerName $IPAddress -NewName $vmname -DomainCredential $ServiceCred -Restart -confirm:$false
